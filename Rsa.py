@@ -11,9 +11,6 @@ from ryu.lib.packet import ethernet
 from ryu.lib import hub
 
 
-# from some_event import ResourceChange
-
-
 class Rsa(NetResource):
     def __init__(self, *args, **kwargs):
         super(Rsa, self).__init__(*args, **kwargs)
@@ -21,6 +18,7 @@ class Rsa(NetResource):
             "BPSK": 25, "QPSK": 50, "8-QAM": 75, "16-QAM": 100
         }
         self.speed = None
+        self.paths_between_node = {}
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def packet_in_handler(self, ev):
@@ -72,11 +70,12 @@ class Rsa(NetResource):
         if src_id is not None and dst_id is not None:
             paths = self.k_shortest_paths(src_id, dst_id, weight='weight', k=3)
             self.logger.info(paths)
-            res, path = self.do_assignment(paths)
+            res, path, slot = self.do_assignment(paths)
             if res:
                 self._creat_graph()
                 # self.logger.info("path:{},slots{}".format(path, self.remainSlots))
-                if paths:
+                if path is not None:
+                    self.paths_between_node.setdefault((ip_src, ip_dst), (path, slot))
                     flow_information = [e_type, ip_src, ip_dst, packet_in_port]
                     # self.logger.info("报文的信息是，以太网类型为{}，源{}目的{}，入端口{}".format(e_type, ip_src, ip_dst, packet_in_port))
                     self.install_flow(datapaths, path, flow_information, msg.buffer_id, data=msg.data)
@@ -96,11 +95,12 @@ class Rsa(NetResource):
 
             slot_number = ceil(self.speed / self.modulation_format[mf])
             self.logger.info("speed{},mf{},num{},dis{},path{}".format(self.speed, mf, slot_number, distance, path))
-            if self.check_resource(slot_number, path):
-                return True, path
+            res, slot = self.check_resource(slot_number, path)
+            if res:
+                return True, path, slot
             else:
                 continue
-        return False, None
+        return False, None, None
 
     def get_distance_of_path(self, path):
         distance = 0
@@ -136,7 +136,7 @@ class Rsa(NetResource):
                     pass
                     # print(path[index], path[index + 1])
                 if len(remain_slot) < slot_number:
-                    return False
+                    return False, None
                 if slot_can_be_used:
                     slot_can_be_used = slot_can_be_used & set(remain_slot)
                 else:
@@ -144,9 +144,9 @@ class Rsa(NetResource):
 
         continue_slot_num = 0
 
-        slot_allowed = []
+        slot_allocated = []
         if len(slot_can_be_used) < slot_number:
-            return False
+            return False, None
         slot_can_be_used = sorted(slot_can_be_used)
         for index_, _ in enumerate(slot_can_be_used):
             if continue_slot_num == slot_number:
@@ -155,17 +155,17 @@ class Rsa(NetResource):
                 if (slot_can_be_used[index_ + 1] - slot_can_be_used[index_]) > 1:
                     if continue_slot_num < slot_number:
                         continue_slot_num = 0
-                        slot_allowed = []
+                        slot_allocated = []
                         continue
                 elif (slot_can_be_used[index_ + 1] - slot_can_be_used[index_]) == 1:
                     if continue_slot_num == 0:
                         continue_slot_num += 2
-                        slot_allowed.extend([slot_can_be_used[index_], slot_can_be_used[index_ + 1]])
+                        slot_allocated.extend([slot_can_be_used[index_], slot_can_be_used[index_ + 1]])
                     else:
                         continue_slot_num += 1
-                        slot_allowed.append(slot_can_be_used[index_ + 1])
+                        slot_allocated.append(slot_can_be_used[index_ + 1])
         else:
-            return False
+            return False, None
         for index, _ in enumerate(path):
 
             if index < len(path) - 1:
@@ -177,9 +177,37 @@ class Rsa(NetResource):
                     pass
                     # print(path[index], path[index + 1])
 
-                for i in slot_allowed:
+                for i in slot_allocated:
                     remain_slot.remove(i)
-        self.logger.info("paths{}:{}".format(path, slot_allowed))
-        # for i in slot_allowed:
+        # self.logger.info("paths{}:{}".format(path, slot_allocated))
+        # for i in slot_allocated:
         #     print(i,)
-        return True
+        return True, slot_allocated
+
+    @set_ev_cls(ofp_event.EventOFPFlowRemoved, MAIN_DISPATCHER)
+    def remove_handler(self, ev):
+        msg = ev.msg
+        src_ip = msg.match["ipv4_src"]
+        dst_ip = msg.match["ipv4_dst"]
+        # self.logger.info("path_beween_nodes{}".format(self.paths_between_node))
+        # for key in self.remainSlots:
+        #     if len(self.remainSlots[key]) < 126:
+        #         self.logger.info("false")
+        #         break
+        # else:
+        #     self.logger.info("true")
+        if (src_ip, dst_ip) in self.paths_between_node:
+            path = self.paths_between_node[(src_ip, dst_ip)][0]
+            slot = self.paths_between_node[(src_ip, dst_ip)][1]
+            self.return_resouces(slot, path)
+            del self.paths_between_node[(src_ip, dst_ip)]
+        else:
+            pass
+
+    def return_resouces(self, slot, path):
+        for index, _ in enumerate(path):
+            if index < len(path) - 1:
+                remain_slot = self.remainSlots.get((path[index], path[index + 1]), None)
+                if remain_slot is None:
+                    remain_slot = self.remainSlots.get((path[index + 1], path[index]))
+                remain_slot.extend(slot)

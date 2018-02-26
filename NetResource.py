@@ -41,7 +41,7 @@ class NetResource(app_manager.RyuApp):
         while True:
             if not flag:
                 if self.graph:
-                    # self.logger.info("创建图完毕")
+                    self.logger.info("创建图完毕")
                     flag = True
             if i == 5:
                 self._creat_graph()

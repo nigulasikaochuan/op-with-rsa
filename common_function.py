@@ -11,7 +11,7 @@ def add_miss_flow(datapath):
     send_flow_mod(datapath, actions, pri=0, match=parser.OFPMatch())
 
 
-def _build_packet_out_2(datapath,buffer_id,dst_port, data):
+def _build_packet_out_2(datapath, buffer_id, dst_port, data):
     """
             Build packet out object.
     """
@@ -25,7 +25,7 @@ def _build_packet_out_2(datapath,buffer_id,dst_port, data):
             if data is None:
                 return None
             msg_data = data
-        #packet_out 的 inport有什么用。。。。
+        # packet_out 的 inport有什么用。。。。
 
         out = datapath.ofproto_parser.OFPPacketOut(
             datapath=datapath, buffer_id=buffer_id,
@@ -46,10 +46,11 @@ def _build_packet_out(datapath, actions, data):
 
     ofproto = datapath.ofproto
     parser = datapath.ofproto_parser
-        # actions = [parser.OFPActionOutput(port)]
+    # actions = [parser.OFPActionOutput(port)]
     packet_out_msg = parser.OFPPacketOut(datapath=datapath, buffer_id=ofproto.OFP_NO_BUFFER,
-                                             in_port=ofproto.OFPP_CONTROLLER, actions=actions, data=data)
+                                         in_port=ofproto.OFPP_CONTROLLER, actions=actions, data=data)
     return packet_out_msg
+
 
 def send_flow_mod(datapath, actions, pri, match, idle_time=0, hard_time=0):
     '''
@@ -68,6 +69,8 @@ def send_flow_mod(datapath, actions, pri, match, idle_time=0, hard_time=0):
     parser = datapath.ofproto_parser
     ofproto = datapath.ofproto
     ins = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
-    message = parser.OFPFlowMod(datapath=datapath, command=ofproto.OFPFC_ADD, priority=pri,match=match, idle_timeout=idle_time, hard_timeout=hard_time, instructions=ins)
+    message = parser.OFPFlowMod(datapath=datapath, command=ofproto.OFPFC_ADD, priority=pri, match=match,
+                                idle_timeout=idle_time, hard_timeout=hard_time, instructions=ins,
+                                flags=ofproto.OFPFF_SEND_FLOW_REM)
 
     datapath.send_msg(message)
