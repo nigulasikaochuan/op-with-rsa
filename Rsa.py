@@ -72,10 +72,10 @@ class Rsa(NetResource):
             self.logger.info(paths)
             res, path, slot = self.do_assignment(paths)
             if res:
-                self._creat_graph()
+
                 # self.logger.info("path:{},slots{}".format(path, self.remainSlots))
                 if path is not None:
-                    self.paths_between_node.setdefault((ip_src, ip_dst), (path, slot))
+                    self.paths_between_node[(ip_src, ip_dst)] = (path, slot)
                     flow_information = [e_type, ip_src, ip_dst, packet_in_port]
                     # self.logger.info("报文的信息是，以太网类型为{}，源{}目的{}，入端口{}".format(e_type, ip_src, ip_dst, packet_in_port))
                     self.install_flow(datapaths, path, flow_information, msg.buffer_id, data=msg.data)
@@ -94,9 +94,12 @@ class Rsa(NetResource):
             mf = self.choose_mf(distance)
 
             slot_number = ceil(self.speed / self.modulation_format[mf])
-            self.logger.info("speed{},mf{},num{},dis{},path{}".format(self.speed, mf, slot_number, distance, path))
+            self.logger.info(
+                "speed{},mf{},num{},dis{},path{}".format(self.speed, mf, slot_number, distance, path))
             res, slot = self.check_resource(slot_number, path)
             if res:
+                self._creat_graph()
+
                 return True, path, slot
             else:
                 continue
@@ -125,6 +128,25 @@ class Rsa(NetResource):
             raise ValueError
 
     def check_resource(self, slot_number, path):
+        slot_can_be_used = self.get_slot_can_be_used(slot_number, path)
+        slot_allocated = self.get_cs(slot_can_be_used, slot_number)
+
+        if slot_allocated is None:
+            return False, None
+        # self.logger.info("slot_can_be used is{},con is {}".format(slot_can_be_used, slot_allocated))
+        self.remove_res(path, slot_allocated)
+        self._creat_graph()
+        return True, slot_allocated
+
+    def return_resouces(self, slot, path):
+        for index, _ in enumerate(path):
+            if index < len(path) - 1:
+                remain_slot = self.remainSlots.get((path[index], path[index + 1]), None)
+                if remain_slot is None:
+                    remain_slot = self.remainSlots.get((path[index + 1], path[index]))
+                remain_slot.extend(slot)
+
+    def get_slot_can_be_used(self, slot_number, path):
         slot_can_be_used = set()
         for index, _ in enumerate(path):
             if index < len(path) - 1:
@@ -141,12 +163,13 @@ class Rsa(NetResource):
                     slot_can_be_used = slot_can_be_used & set(remain_slot)
                 else:
                     slot_can_be_used.update(set(remain_slot))
+        return slot_can_be_used
 
+    def get_cs(self, slot_can_be_used, slot_number):
         continue_slot_num = 0
-
         slot_allocated = []
         if len(slot_can_be_used) < slot_number:
-            return False, None
+            return None
         slot_can_be_used = sorted(slot_can_be_used)
         for index_, _ in enumerate(slot_can_be_used):
             if continue_slot_num == slot_number:
@@ -164,8 +187,12 @@ class Rsa(NetResource):
                     else:
                         continue_slot_num += 1
                         slot_allocated.append(slot_can_be_used[index_ + 1])
+        # 如果break 不执行else
         else:
-            return False, None
+            return None
+        return slot_allocated
+
+    def remove_res(self, path, slot_allocated):
         for index, _ in enumerate(path):
 
             if index < len(path) - 1:
@@ -176,38 +203,44 @@ class Rsa(NetResource):
                 else:
                     pass
                     # print(path[index], path[index + 1])
-
+                # for i in slot_allocated:
+                #     remain_slot.remove(i)
                 for i in slot_allocated:
-                    remain_slot.remove(i)
+                    try:
+                        remain_slot.remove(i)
+                    except ValueError:
+                        self.logger.info("error")
+                        # self.logger.info(slot_can_be_used)
+                        self.logger.info(remain_slot)
+                        self.logger.info(index)
+                        self.logger.info(i)
+                        self.logger.info(slot_allocated)
         # self.logger.info("paths{}:{}".format(path, slot_allocated))
         # for i in slot_allocated:
         #     print(i,)
-        return True, slot_allocated
 
     @set_ev_cls(ofp_event.EventOFPFlowRemoved, MAIN_DISPATCHER)
     def remove_handler(self, ev):
         msg = ev.msg
-        src_ip = msg.match["ipv4_src"]
-        dst_ip = msg.match["ipv4_dst"]
-        # self.logger.info("path_beween_nodes{}".format(self.paths_between_node))
-        # for key in self.remainSlots:
-        #     if len(self.remainSlots[key]) < 126:
-        #         self.logger.info("false")
-        #         break
-        # else:
-        #     self.logger.info("true")
-        if (src_ip, dst_ip) in self.paths_between_node:
-            path = self.paths_between_node[(src_ip, dst_ip)][0]
-            slot = self.paths_between_node[(src_ip, dst_ip)][1]
-            self.return_resouces(slot, path)
-            del self.paths_between_node[(src_ip, dst_ip)]
-        else:
-            pass
+        try:
+            src_ip = msg.match["ipv4_src"]
+            dst_ip = msg.match["ipv4_dst"]
+            # self.logger.info("path_beween_nodes{}".format(self.paths_between_node))
+            # for key in self.remainSlots:
+            #     if len(self.remainSlots[key]) < 126:
+            #         self.logger.info("false")
+            #         break
+            # else:
+            #     self.logger.info("true")
+            if (src_ip, dst_ip) in self.paths_between_node:
+                path = self.paths_between_node[(src_ip, dst_ip)][0]
+                slot = self.paths_between_node[(src_ip, dst_ip)][1]
+                self.return_resouces(slot, path)
 
-    def return_resouces(self, slot, path):
-        for index, _ in enumerate(path):
-            if index < len(path) - 1:
-                remain_slot = self.remainSlots.get((path[index], path[index + 1]), None)
-                if remain_slot is None:
-                    remain_slot = self.remainSlots.get((path[index + 1], path[index]))
-                remain_slot.extend(slot)
+                self._creat_graph()
+                del self.paths_between_node[(src_ip, dst_ip)]
+            else:
+                pass
+
+        except Exception as e:
+            pass
